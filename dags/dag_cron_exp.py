@@ -11,11 +11,10 @@ default_args = {
 
 
 @dag(
-    dag_id='dag_taskflow_v3',
-    start_date=datetime(2023,8,12),
-    schedule_interval='@daily',
+    dag_id='dag_cron_v3',
+    start_date=datetime(2023,7,12),
+    schedule_interval='0 12 * * mon-wed',
     default_args=default_args,
-    catchup=False
 )
 def try_reduce():
 
