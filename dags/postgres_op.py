@@ -47,6 +47,9 @@ with DAG (
             MERGE INTO dag_run as target
             USING temp_dag_run as source
                 ON target.dt = source.dt AND target.dag_id=source.dag_id
+            
+            --you do not define the table alias since all actions refer to the target table
+            --if you specify table e.g target.dt you'll get an error
             WHEN MATCHED THEN
                 UPDATE SET dt = source.dt, dag_id = source.dag_id
             WHEN NOT MATCHED THEN
