@@ -1,3 +1,4 @@
 azure-storage-blob
 apache-airflow-providers-microsoft-azure
 python-dotenv
+pyarrow
