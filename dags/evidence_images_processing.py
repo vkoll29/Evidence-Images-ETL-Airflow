@@ -112,20 +112,17 @@ def process_evidence_images():
 
         return get_blobs_data
 
-    tasks = []
-    dataframes = []
-    for blob in blob_params_list:
-        variable_name = [key for key, value in os.environ.items() if value == blob['container']][0]
-        country_code = variable_name[:3].lower()
-
-        get_blobs_task = create_task(country_code, container=blob['container'], sas_token=blob['sas_token'])
-        tasks.append(get_blobs_task())
-        # print(dir(get_blobs_task()))
 
     @task
-    def concat_dfs(inp):
-        print(inp)
-    concat_dfs(dir(tasks))
+    def concat_dfs(dfs_list):
+        """
+        Each of the get_country_blobs task generates a df. these are then added to a list. This task is intended to concatenate the dfs into one
+
+        :param dfs_list: list of dfs from each blob ingestion task
+        :return: one whole dataframe
+        """
+        df = pd.concat(dfs_list)
+        print(len(df))
 
 
 
@@ -304,7 +301,25 @@ def process_evidence_images():
 
 
 
-    # tb = create_irmq_tb()
+    tb = create_irmq_tb()
+
+    dfs = []
+    dataframes = []
+    for params in blob_params_list:
+        # in the line below, get the key and not value of  whatever value is currently contained in the container key
+        # basically doing a reverse search.
+        variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
+        country_code = variable_name[:3].lower()
+
+        # this line only generates the tasks. it doesn't run them
+        get_blobs_task = create_task(country_code, container=params['container'], sas_token=params['sas_token'])
+        # you have to store the output in a variable and call the task to run it
+        df_task = get_blobs_task()
+        tb.set_downstream(df_task)
+        dfs.append(df_task)
+
+    combined_df = concat_dfs(dfs)
+
     # get_blobs = get_blobs_data()
 
     # blob_ingestion_tasks = []
@@ -323,18 +338,18 @@ def process_evidence_images():
     #     accountURI='https://irclientdataexport.blob.core.windows.net',
     #     IRType='IRMQ'
     # # )
-    # filtered_columns = filter_columns(df)
-    # tb.set_downstream(filtered_columns)
-    # transformed_column_types = transform_column_dtypes(filtered_columns)
-    # filtered_rows = filter_rows(transformed_column_types)
-    # transformed_dates = transform_date_columns(filtered_rows)
-    # rslt =load_to_table(transformed_dates)
-    #
-    # separated_images = separate_image_names()
-    # rslt.set_downstream(separated_images)
-    #
-    # formated_url = format_image_urls()
-    # separated_images.set_downstream(formated_url)
+    filtered_columns = filter_columns(combined_df)
+
+    transformed_column_types = transform_column_dtypes(filtered_columns)
+    filtered_rows = filter_rows(transformed_column_types)
+    transformed_dates = transform_date_columns(filtered_rows)
+    rslt =load_to_table(transformed_dates)
+
+    separated_images = separate_image_names()
+    rslt.set_downstream(separated_images)
+
+    formated_url = format_image_urls()
+    separated_images.set_downstream(formated_url)
 
 images = process_evidence_images()
 

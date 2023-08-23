@@ -11,7 +11,7 @@ COPY .env .env
 
 # upgrade pip then install specified packages in requirements.txt
 RUN pip install --user --upgrade pip
-RUN pip install --no-cache-dir --user -r /requirments.txt
+
 
 # install nano and vim
 # must set user to root first before running elevated commands, then set it back
