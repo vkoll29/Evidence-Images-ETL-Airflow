@@ -70,40 +70,63 @@ def process_evidence_images():
         cursor.close()
         conn.close()
 
+    blob_params_list = [
+        {'container': os.environ.get('KEN_CONTAINER'), 'sas_token': os.environ.get('KEN_SAS')},
+        {'container': os.environ.get('BWA_CONTAINER'), 'sas_token': os.environ.get('BWA_SAS')},
+        {'container': os.environ.get('ETH_CONTAINER'), 'sas_token': os.environ.get('ETH_SAS')},
+        {'container': os.environ.get('TZA_CONTAINER'), 'sas_token': os.environ.get('TZA_SAS')},
+        {'container': os.environ.get('MOZ_CONTAINER'), 'sas_token': os.environ.get('MOZ_SAS')},
+        {'container': os.environ.get('UGA_CONTAINER'), 'sas_token': os.environ.get('UGA_SAS')},
+        {'container': os.environ.get('ZAM_CONTAINER'), 'sas_token': os.environ.get('ZAM_SAS')},
+        {'container': os.environ.get('NAM_CONTAINER'), 'sas_token': os.environ.get('NAM_SAS')},
+        {'container': os.environ.get('GHA_CONTAINER'), 'sas_token': os.environ.get('GHA_SAS')},
+        {'container': os.environ.get('CBL_CONTAINER'), 'sas_token': os.environ.get('CBL_SAS')}
+    ]
+
+    def create_task(country_code, container, sas_token):
+        @task(task_id=f"get_{country_code}_data")
+        def get_blobs_data(accountURI=os.environ.get('URI'), IRType='IRMQ'):
+            print(country_code)
+            start_date, end_date = get_dates(start=1)
+            path = f'V2/Data/{IRType}'
+            print(start_date, end_date)
+
+            blob_service_client = BlobServiceClient(account_url=accountURI, credential=sas_token)
+            container_client = blob_service_client.get_container_client(container)
+            blobs = []
+            for blob in container_client.list_blobs(name_starts_with=path):
+                if start_date <= blob.last_modified.date() <= end_date:
+                    blobs.append(blob.name)
+
+            dfs_list = []
+            for blob in blobs:
+                blob_client = blob_service_client.get_blob_client(container, blob, snapshot=None)
+                data = pa.BufferReader(blob_client.download_blob().readall())
+                parquet_table = pq.read_table(data)
+                df = parquet_table.to_pandas()
+                dfs_list.append(df)
+
+            all_data_df = pd.concat(dfs_list)
+            print(len(all_data_df))
+            return all_data_df
+
+        return get_blobs_data
+
+    tasks = []
+    dataframes = []
+    for blob in blob_params_list:
+        variable_name = [key for key, value in os.environ.items() if value == blob['container']][0]
+        country_code = variable_name[:3].lower()
+
+        get_blobs_task = create_task(country_code, container=blob['container'], sas_token=blob['sas_token'])
+        tasks.append(get_blobs_task())
+        # print(dir(get_blobs_task()))
 
     @task
-    def get_blobs_data(container: str, sas_token: str, accountURI: str=os.environ.get('URI'), IRType: str='IRMQ'):
-        """
-        This needs to be improved so that the previous run and next dag run(no_dash) are used to generate start and end dates
-          :param container: the azure storage container to connect to
-          :param sas_token:  the container's SAS  token
-          :param accountURI: fully qualified account URI
-          :param IRType: the IR file to download
-          :return: dataframe created from the blobs
-          """
+    def concat_dfs(inp):
+        print(inp)
+    concat_dfs(dir(tasks))
 
-        start_date, end_date = get_dates(start=1)
-        path = f'V2/Data/{IRType}'
-        print(start_date, end_date)
-
-        blob_service_client = BlobServiceClient(account_url=accountURI, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container)
-        blobs = []
-        for blob in container_client.list_blobs(name_starts_with=path):
-            if start_date <= blob.last_modified.date() <= end_date:
-                blobs.append(blob.name)
-
-        dfs_list = []
-        for blob in blobs:
-            blob_client = blob_service_client.get_blob_client(container, blob, snapshot=None)
-            data = pa.BufferReader(blob_client.download_blob().readall())
-            parquet_table = pq.read_table(data)
-            df = parquet_table.to_pandas()
-            dfs_list.append(df)
-
-        all_data_df = pd.concat(dfs_list)
-        print(type(all_data_df))
-        return all_data_df
 
 
 
@@ -281,25 +304,37 @@ def process_evidence_images():
 
 
 
-    tb = create_irmq_tb()
-    df = get_blobs_data(
-        container='ccba-kenya',
-        sas_token=sas,
-        accountURI='https://irclientdataexport.blob.core.windows.net',
-        IRType='IRMQ'
-    )
-    filtered_columns = filter_columns(df)
-    tb.set_downstream(filtered_columns)
-    transformed_column_types = transform_column_dtypes(filtered_columns)
-    filtered_rows = filter_rows(transformed_column_types)
-    transformed_dates = transform_date_columns(filtered_rows)
-    rslt =load_to_table(transformed_dates)
+    # tb = create_irmq_tb()
+    # get_blobs = get_blobs_data()
 
-    separated_images = separate_image_names()
-    rslt.set_downstream(separated_images)
+    # blob_ingestion_tasks = []
+    #
+    # for params in task_params_list:
+    #     dynamic_task = get_blobs_data(**params)  # Using **params to pass the dictionary as keyword arguments
+    #     dynamic_task.dag = process_evidence_images
+    #     blob_ingestion_tasks.append(dynamic_task)
+    #
+    #     tb.set_downstream(dynamic_task)
 
-    formated_url = format_image_urls()
-    separated_images.set_downstream(formated_url)
+
+    # df = get_blobs_data(
+    #     container='ccba-kenya',
+    #     sas_token=sas,
+    #     accountURI='https://irclientdataexport.blob.core.windows.net',
+    #     IRType='IRMQ'
+    # # )
+    # filtered_columns = filter_columns(df)
+    # tb.set_downstream(filtered_columns)
+    # transformed_column_types = transform_column_dtypes(filtered_columns)
+    # filtered_rows = filter_rows(transformed_column_types)
+    # transformed_dates = transform_date_columns(filtered_rows)
+    # rslt =load_to_table(transformed_dates)
+    #
+    # separated_images = separate_image_names()
+    # rslt.set_downstream(separated_images)
+    #
+    # formated_url = format_image_urls()
+    # separated_images.set_downstream(formated_url)
 
 images = process_evidence_images()
 
