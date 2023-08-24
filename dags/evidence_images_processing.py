@@ -6,12 +6,18 @@ import pyarrow as pa
 from pyarrow import parquet as pq
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.postgres.operators.postgres import PostgresOperator
-from airflow.decorators import dag, task
+from airflow.decorators import dag, task, task_group
+from airflow.exceptions import AirflowException
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from dotenv import load_dotenv
+import psycopg2
+from psycopg2 import errorcodes
 
 from common_helpers.get_dates import get_dates
 from common_helpers.concat_dfs import concat_dfs
+from common_helpers.blob_ingestion import get_blobs_data
+from common_helpers.filter_columns import filter_columns
+from common_helpers.column_transformations import transform_column_dtypes, transform_date_columns
 
 load_dotenv()
 
@@ -22,7 +28,7 @@ load_dotenv()
     schedule_interval='@daily',
     default_args={
          'owner': 'vkoll29',
-         'retries': 1,
+         # 'retries': 1,
          'retry_delay': timedelta(seconds=30)
     },
     catchup=False)
@@ -97,47 +103,13 @@ def process_evidence_images():
         conn.close()
 
 
-    blob_params_list = [
-        {'container': os.environ.get('KEN_CONTAINER'), 'sas_token': os.environ.get('KEN_SAS')},
-        {'container': os.environ.get('BWA_CONTAINER'), 'sas_token': os.environ.get('BWA_SAS')},
-        {'container': os.environ.get('ETH_CONTAINER'), 'sas_token': os.environ.get('ETH_SAS')},
-        {'container': os.environ.get('TZA_CONTAINER'), 'sas_token': os.environ.get('TZA_SAS')},
-        {'container': os.environ.get('MOZ_CONTAINER'), 'sas_token': os.environ.get('MOZ_SAS')},
-        {'container': os.environ.get('UGA_CONTAINER'), 'sas_token': os.environ.get('UGA_SAS')},
-        {'container': os.environ.get('ZAM_CONTAINER'), 'sas_token': os.environ.get('ZAM_SAS')},
-        {'container': os.environ.get('NAM_CONTAINER'), 'sas_token': os.environ.get('NAM_SAS')},
-        {'container': os.environ.get('GHA_CONTAINER'), 'sas_token': os.environ.get('GHA_SAS')},
-        {'container': os.environ.get('CBL_CONTAINER'), 'sas_token': os.environ.get('CBL_SAS')}
-    ]
-
-    def create_task(blob_type, country_code, container, sas_token):
+    def create_task(blob_type, country_code, container, sas_token, folder):
         @task(task_id=f"get_{country_code}_{blob_type}")
-        def get_blobs_data(accountURI=os.environ.get('URI'), IRType='IRMQ'):
-            print(country_code)
-            start_date, end_date = get_dates(start=1)
-            path = f'V2/Data/{IRType}'
-            print(start_date, end_date)
+        def get_blobs_data_task():
 
-            blob_service_client = BlobServiceClient(account_url=accountURI, credential=sas_token)
-            container_client = blob_service_client.get_container_client(container)
-            blobs = []
-            for blob in container_client.list_blobs(name_starts_with=path):
-                if start_date <= blob.last_modified.date() <= end_date:
-                    blobs.append(blob.name)
+            return get_blobs_data(container=container, sas_token=sas_token, IRType=folder)
 
-            dfs_list = []
-            for blob in blobs:
-                blob_client = blob_service_client.get_blob_client(container, blob, snapshot=None)
-                data = pa.BufferReader(blob_client.download_blob().readall())
-                parquet_table = pq.read_table(data)
-                df = parquet_table.to_pandas()
-                dfs_list.append(df)
-
-            all_data_df = pd.concat(dfs_list)
-            print(len(all_data_df))
-            return all_data_df
-
-        return get_blobs_data
+        return get_blobs_data_task
 
     @task
     def combine_dfs_task(task_suffix, dfs_list):
@@ -145,70 +117,17 @@ def process_evidence_images():
         return concat_dfs(dfs_list)
 
     @task
-    def filter_columns(df):
-
-        """
-           this function takes a dataframe and a list of columns to keep and returns a df only with those specified columns
-           :param df: larger dataframe that includes unneeded columns
-           :return: minimized df with only the specified columns
-           """
-
-        columns_to_keep = [
-                'SessionUID',
-                'SceneUID',
-                'SceneType',
-                'SubSceneType',
-                'EvidenceImageURL',
-                'EvidenceImageName',
-                'CreatedOnTime',
-                'ReExportStatus',
-                'ReExportTime',
-                'ReProcessedStatus',
-                'ReProcessedTime'
-        ]
-        print(type(df))
-        for col in df.columns:
-            if col.lower() not in [col_keep.lower() for col_keep in columns_to_keep]:
-                del df[col]
-        print(type(df))
-        return df
+    def filter_columns_task(df, cols):
+        return filter_columns(df, cols)
 
     @task
-    def transform_column_dtypes(df):
-
-        """
-        convert a boolean-like columns to bit as in its corresponding column.
-        Will transform the values in the provided column to 0 or 1 to match the column setup in db
-        :param df: dataframe
-        :return: dataframe with the columns transformed
-        """
-
-        for col in list(df.columns):
-            df[col].replace({'True': 1, 'False': 0}, inplace=True)
-
-        """
-        Changes the columns whose data types  are loaded as object in the dataframe to string.
-        This should be extended to accept a dictionary (or something like that) whose key is the current dtype and value is the desired dtype
-        """
-        for col in df.columns:
-            if df.dtypes[col] == 'object':
-                df[col] = df[col].astype("string")
-        print(df.dtypes)
-        return df
+    def transform_column_dtypes_task(df):
+        return transform_column_dtypes(df)
 
 
     @task
-    def transform_date_columns(df):
-        """
-        Undefined dates are represented as NaT in pandas. change these to Null
-        :param df:
-        :return:
-        """
-        for col in df.columns:
-            if df[col].dtype == 'datetime64[ns]':
-                df = df.applymap(lambda x: None if pd.isna(x) else x)
-
-        return df
+    def transform_date_columns_task(df):
+        return transform_date_columns(df)
 
 
 
@@ -217,7 +136,7 @@ def process_evidence_images():
         return df[df['EvidenceImageURL'] != '']
 
     @task
-    def load_to_table(df):
+    def load_to_mq_table(df):
         sql = """
             INSERT INTO evidence_images(
                 Sessionuid,
@@ -241,6 +160,53 @@ def process_evidence_images():
                 cursor.executemany(sql, parameters)
         logging.info("Data inserted successfully!")
 
+    @task
+    def load_to_sessions_table(df):
+        #TASK: Calculate session_length
+        sql = """
+                INSERT INTO sessions(
+                   Sessionuid,
+                   session_start_date,
+                   session_end_date,
+
+                   program_id,
+                   program_name,
+                   program_item_id,
+                   program_item_name,
+                   client_code,
+                   sub_client_code,
+                   outlet_code,
+                   outlet_name,
+                   country_code,
+                   user_id,
+                   user_profile,
+                   sessionstatus,
+                   latitude,
+                   longitude,
+                   cancel_call_note,
+                   cancel_call_reason,
+                   cancel_evidence_image_url,
+                   cancel_evidence_image_name,
+                   session_end_latitude,
+                   session_end_longitude
+                )
+                VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+        parameters = [tuple(row) for row in df.values]
+        hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
+
+        with hook.get_conn() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    cursor.executemany(sql, parameters)
+                    logging.info("Data inserted successfully!")
+
+                except psycopg2.Error as e:
+                    if e.pgcode == errorcodes.STRING_DATA_RIGHT_TRUNCATION:
+                        print(f"Error: {e}")
+                        print(f"Column causing the error: {e.diag.column_name}")
+                        logging.error(f"Error: {e}")
+                        logging.error(f"Column causing the error: {e.diag.column_name}")
+                        raise AirflowException("DB Error: Could not load data to Sessions table")
 
     @task
     def separate_image_names():
@@ -309,10 +275,24 @@ def process_evidence_images():
 
 
     #### TASKS ARE RUN HERE
-    tb = create_irmq_tb()
+    mq_tb = create_irmq_tb()
     sessions_tb = create_sessions_tb()
 
     irmq_dfs = []
+    sessions_dfs = []
+
+    blob_params_list = [
+        {'container': os.environ.get('KEN_CONTAINER'), 'sas_token': os.environ.get('KEN_SAS')},
+        {'container': os.environ.get('BWA_CONTAINER'), 'sas_token': os.environ.get('BWA_SAS')},
+        {'container': os.environ.get('ETH_CONTAINER'), 'sas_token': os.environ.get('ETH_SAS')},
+        {'container': os.environ.get('TZA_CONTAINER'), 'sas_token': os.environ.get('TZA_SAS')},
+        {'container': os.environ.get('MOZ_CONTAINER'), 'sas_token': os.environ.get('MOZ_SAS')},
+        {'container': os.environ.get('UGA_CONTAINER'), 'sas_token': os.environ.get('UGA_SAS')},
+        {'container': os.environ.get('ZAM_CONTAINER'), 'sas_token': os.environ.get('ZAM_SAS')},
+        {'container': os.environ.get('NAM_CONTAINER'), 'sas_token': os.environ.get('NAM_SAS')},
+        {'container': os.environ.get('GHA_CONTAINER'), 'sas_token': os.environ.get('GHA_SAS')},
+        {'container': os.environ.get('CBL_CONTAINER'), 'sas_token': os.environ.get('CBL_SAS')}
+    ]
     for params in blob_params_list:
         # in the line below, get the key and not value of  whatever value is currently contained in the container key
         # basically doing a reverse search.
@@ -320,37 +300,100 @@ def process_evidence_images():
         country_code = variable_name[:3].lower()
 
         # this line only generates the tasks. it doesn't run them
-        get_irmq_task = create_task(blob_type='irmq', country_code=country_code, container=params['container'], sas_token=params['sas_token'])
+        get_irmq_task = create_task(
+            blob_type='irmq',
+            country_code=country_code,
+            container=params['container'],
+            sas_token=params['sas_token'],
+            folder='IRMQ'
+        )
+        get_sessions_task = create_task(
+            blob_type='sessions',
+            country_code=country_code,
+            container=params['container'],
+            sas_token=params['sas_token'],
+            folder='IRSession'
+        )
         # you have to store the output in a variable and call the task to run it
-        df_task = get_irmq_task()
-        tb.set_downstream(df_task)
-        irmq_dfs.append(df_task)
-
-    sessions_dfs = []
-    for params in blob_params_list:
-        variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
-        country_code = variable_name[:3].lower()
-        get_sessions_task = create_task(blob_type='sessions', country_code=country_code, container=params['container'], sas_token=params['sas_token'])
+        mq_task = get_irmq_task()
         sessions_task = get_sessions_task()
+
+        mq_tb.set_downstream(mq_task)
         sessions_tb.set_downstream(sessions_task)
+
+        irmq_dfs.append(mq_task)
         sessions_dfs.append(sessions_task)
 
 
+    # combine the generated dfs for all countries into one
     combined_irmq_df = combine_dfs_task('irmq', irmq_dfs)
-    # combined_irmq_df = concat_dfs(irmq_dfs)
     combined_sessions_df = combine_dfs_task('sessions', sessions_dfs) # find a way to rename this dag_id
 
-    filtered_columns = filter_columns(combined_irmq_df)
-    transformed_column_types = transform_column_dtypes(filtered_columns)
-    filtered_rows = filter_rows(transformed_column_types)
-    transformed_dates = transform_date_columns(filtered_rows)
-    rslt =load_to_table(transformed_dates)
+    # remove unwanted columns
+    # filtered_columns = filter_columns(combined_irmq_df)
+    mq_columns_to_keep = [
+        'SessionUID',
+        'SceneUID',
+        'SceneType',
+        'SubSceneType',
+        'EvidenceImageURL',
+        'EvidenceImageName',
+        'CreatedOnTime',
+        'ReExportStatus',
+        'ReExportTime',
+        'ReProcessedStatus',
+        'ReProcessedTime'
+    ]
+    sessions_columns_to_keep = [
+        'Sessionuid',
+        'sessionstartdatetime',
+        'sessionenddatetime',
+        'programid',
+        'programname',
+        'programitemid',
+        'programitemname',
+        'clientcode',
+        'subclientcode',
+        'outletcode',
+        'outletname',
+        'countrycode',
+        'userid',
+        'userprofile',
+        'sessionstatus',
+        'latitude',
+        'longitude',
+        'cancelcallnote',
+        'cancelcallreason',
+        'cancelevidenceimageurl',
+        'cancelevidenceimagename',
+        'sessionendlatitude',
+        'sessionendlongitude'
+    ]
+    mq_filtered_columns = filter_columns_task(combined_irmq_df, mq_columns_to_keep)
+    sessions_filtered_columns = filter_columns_task(combined_sessions_df, sessions_columns_to_keep)
 
-    separated_images = separate_image_names()
-    rslt.set_downstream(separated_images)
 
-    formated_url = format_image_urls()
-    separated_images.set_downstream(formated_url)
+    #transform column types
+    mq_transformed_column_types = transform_column_dtypes_task(mq_filtered_columns)
+    sessions_transformed_column_type = transform_column_dtypes_task(sessions_filtered_columns)
+
+    # transform date columns
+    mq_transformed_dates = transform_date_columns_task(mq_transformed_column_types)
+    sessions_transformed_dates = transform_date_columns_task(sessions_transformed_column_type)
+
+
+    # # filter evidence image rows to only keep the rows that have images
+    mq_filtered_rows = filter_rows(mq_transformed_dates)
+
+
+    load_mq =load_to_mq_table(mq_filtered_rows)
+    load_sessuibs = load_to_sessions_table(sessions_transformed_dates)
+    #
+    # separated_images = separate_image_names()
+    # rslt.set_downstream(separated_images)
+    #
+    # formated_url = format_image_urls()
+    # separated_images.set_downstream(formated_url)
 
 images = process_evidence_images()
 
