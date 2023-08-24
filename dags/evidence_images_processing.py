@@ -10,20 +10,11 @@ from airflow.decorators import dag, task
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from dotenv import load_dotenv
 
+from common_helpers.get_dates import get_dates
+from common_helpers.concat_dfs import concat_dfs
 
 load_dotenv()
 
-
-def get_dates(start=0, stop=-1):
-    """
-    :param start: How far ago do you want the pipeline to run. 0 means only today
-    :param stop: when do you want the ETL to stop. Default is -1 meaning stop at the most recent file. I.e, when it's -1, last_modified will be tomorrow so it won't cut off any files
-    :return: a date tuple with the start and stop dates
-    """
-
-    begin = datetime.today().date() - timedelta(days=start)
-    end = datetime.today().date() - timedelta(days=stop)
-    return begin, end
 
 
 @dag(dag_id='1_process_evidence_images',
@@ -57,18 +48,54 @@ def process_evidence_images():
                 ReProcessedTime	timestamp
                 )                
         """
-
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
         conn = hook.get_conn()
         cursor = conn.cursor()
-        try:
-            cursor.execute(sql)
-            conn.commit()
-            logging.info("Table Created")
-        except Exception as e:
-            logging.error("An exception occurred: %s", str(e), exc_info=True)
+        cursor.execute(sql)
+        conn.commit()
+        logging.info("Table Created")
         cursor.close()
         conn.close()
+
+    @task
+    def create_sessions_tb():
+        sql = """
+               CREATE TABLE IF NOT EXISTS sessions(
+                   Sessionuid UUID,
+                   session_start_date timestamp,
+                   session_end_date timestamp,
+                   session_length interval,
+                   program_id int,
+                   program_name varchar(255),
+                   program_item_id int,
+                   program_item_name varchar(255),
+                   client_code varchar(50),
+                   sub_client_code varchar(50),
+                   outlet_code varchar(100),
+                   outlet_name varchar(255),
+                   country_code varchar(10),
+                   user_id varchar(50),
+                   user_profile varchar(100),
+                   sessionstatus varchar(50),
+                   latitude double precision,
+                   longitude double precision,
+                   cancel_call_note varchar(50),
+                   cancel_call_reason varchar(255),
+                   cancel_evidence_image_url text,
+                   cancel_evidence_image_name varchar(100),
+                   session_end_latitude double precision,
+                   session_end_longitude double precision
+                   )                
+           """
+        hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
+        conn = hook.get_conn()
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        conn.commit()
+        logging.info("Table Created")
+        cursor.close()
+        conn.close()
+
 
     blob_params_list = [
         {'container': os.environ.get('KEN_CONTAINER'), 'sas_token': os.environ.get('KEN_SAS')},
@@ -83,8 +110,8 @@ def process_evidence_images():
         {'container': os.environ.get('CBL_CONTAINER'), 'sas_token': os.environ.get('CBL_SAS')}
     ]
 
-    def create_task(country_code, container, sas_token):
-        @task(task_id=f"get_{country_code}_data")
+    def create_task(blob_type, country_code, container, sas_token):
+        @task(task_id=f"get_{country_code}_{blob_type}")
         def get_blobs_data(accountURI=os.environ.get('URI'), IRType='IRMQ'):
             print(country_code)
             start_date, end_date = get_dates(start=1)
@@ -112,21 +139,10 @@ def process_evidence_images():
 
         return get_blobs_data
 
-
     @task
-    def concat_dfs(dfs_list):
-        """
-        Each of the get_country_blobs task generates a df. these are then added to a list. This task is intended to concatenate the dfs into one
-
-        :param dfs_list: list of dfs from each blob ingestion task
-        :return: one whole dataframe
-        """
-        df = pd.concat(dfs_list)
-        print(len(df))
-
-
-
-
+    def combine_dfs_task(task_suffix, dfs_list):
+        task_id = f'my_concat_dfs_task_{task_suffix}'
+        return concat_dfs(dfs_list)
 
     @task
     def filter_columns(df):
@@ -154,7 +170,6 @@ def process_evidence_images():
         for col in df.columns:
             if col.lower() not in [col_keep.lower() for col_keep in columns_to_keep]:
                 del df[col]
-        # print(list(df.columns))
         print(type(df))
         return df
 
@@ -293,18 +308,11 @@ def process_evidence_images():
 
 
 
-
-
-
-
-
-
-
-
+    #### TASKS ARE RUN HERE
     tb = create_irmq_tb()
+    sessions_tb = create_sessions_tb()
 
-    dfs = []
-    dataframes = []
+    irmq_dfs = []
     for params in blob_params_list:
         # in the line below, get the key and not value of  whatever value is currently contained in the container key
         # basically doing a reverse search.
@@ -312,34 +320,27 @@ def process_evidence_images():
         country_code = variable_name[:3].lower()
 
         # this line only generates the tasks. it doesn't run them
-        get_blobs_task = create_task(country_code, container=params['container'], sas_token=params['sas_token'])
+        get_irmq_task = create_task(blob_type='irmq', country_code=country_code, container=params['container'], sas_token=params['sas_token'])
         # you have to store the output in a variable and call the task to run it
-        df_task = get_blobs_task()
+        df_task = get_irmq_task()
         tb.set_downstream(df_task)
-        dfs.append(df_task)
+        irmq_dfs.append(df_task)
 
-    combined_df = concat_dfs(dfs)
-
-    # get_blobs = get_blobs_data()
-
-    # blob_ingestion_tasks = []
-    #
-    # for params in task_params_list:
-    #     dynamic_task = get_blobs_data(**params)  # Using **params to pass the dictionary as keyword arguments
-    #     dynamic_task.dag = process_evidence_images
-    #     blob_ingestion_tasks.append(dynamic_task)
-    #
-    #     tb.set_downstream(dynamic_task)
+    sessions_dfs = []
+    for params in blob_params_list:
+        variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
+        country_code = variable_name[:3].lower()
+        get_sessions_task = create_task(blob_type='sessions', country_code=country_code, container=params['container'], sas_token=params['sas_token'])
+        sessions_task = get_sessions_task()
+        sessions_tb.set_downstream(sessions_task)
+        sessions_dfs.append(sessions_task)
 
 
-    # df = get_blobs_data(
-    #     container='ccba-kenya',
-    #     sas_token=sas,
-    #     accountURI='https://irclientdataexport.blob.core.windows.net',
-    #     IRType='IRMQ'
-    # # )
-    filtered_columns = filter_columns(combined_df)
+    combined_irmq_df = combine_dfs_task('irmq', irmq_dfs)
+    # combined_irmq_df = concat_dfs(irmq_dfs)
+    combined_sessions_df = combine_dfs_task('sessions', sessions_dfs) # find a way to rename this dag_id
 
+    filtered_columns = filter_columns(combined_irmq_df)
     transformed_column_types = transform_column_dtypes(filtered_columns)
     filtered_rows = filter_rows(transformed_column_types)
     transformed_dates = transform_date_columns(filtered_rows)
