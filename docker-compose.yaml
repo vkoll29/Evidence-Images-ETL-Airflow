@@ -6,7 +6,7 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider packages you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-extending_airflow:latest}
+  image: ${AIRFLOW_IMAGE_NAME:-airflow_dbt:latest}
   # build: .
   environment:
     &airflow-common-env
@@ -20,6 +20,15 @@ x-airflow-common:
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+
+    AIRFLOW__EMAIL__EMAIL_BACKEND: 'airflow.utils.email.send_email_smtp'
+#    AIRFLOW__SMTP__SMTP_HOST: 'smtp.gmail.com'
+#    AIRFLOW_SMTP__SMTP_STARTTLS: True
+#    AIRFLOW_SMTP__SMTP_PORT: 587
+#    AIRFLOW_SMTP__SMTP_SSL: False
+#    AIRFLOW_SMTP__SMTP_USER: 'vkollspam1@gmail.com'
+#    AIRFLOW_SMTP__SMTP_PASSWORD: 'paswaaad'
+#    AIRFLOW_SMTP__SMTP_MAIL_FROM: 'vkollspam1@gmail.com'
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
     # See https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/logging-monitoring/check-health.html#scheduler-health-check-server
@@ -34,6 +43,8 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/helpers:/opt/airflow/helpers
+    - ${AIRFLOW_PROJ_DIR:-.}/dbt:/opt/airflow/dbt
+
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

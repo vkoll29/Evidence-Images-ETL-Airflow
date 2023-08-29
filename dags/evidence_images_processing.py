@@ -5,15 +5,16 @@ import pandas as pd
 import pyarrow as pa
 from pyarrow import parquet as pq
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.providers.postgres.operators.postgres import PostgresOperator
+from airflow.utils.task_group import TaskGroup
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowException
+from airflow.operators.email_operator import EmailOperator
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2 import errorcodes
 
-from common_helpers.get_dates import get_dates
+
 from common_helpers.concat_dfs import concat_dfs
 from common_helpers.blob_ingestion import get_blobs_data
 from common_helpers.filter_columns import filter_columns
@@ -22,14 +23,18 @@ from common_helpers.column_transformations import transform_column_dtypes, trans
 load_dotenv()
 
 
-
+email_to = 'vkollspam1@gmail.com'
+start = 6
+stop = 4
 @dag(dag_id='1_process_evidence_images',
-    start_date=datetime(2023,8,20),
-    schedule_interval='@daily',
+     start_date=datetime(2023,8,20),
+     schedule_interval='@daily',
+     max_active_runs=1,
     default_args={
          'owner': 'vkoll29',
          # 'retries': 1,
-         'retry_delay': timedelta(seconds=30)
+
+         # 'retry_delay': timedelta(seconds=30)
     },
     catchup=False)
 def process_evidence_images():
@@ -103,11 +108,11 @@ def process_evidence_images():
         conn.close()
 
 
-    def create_task(blob_type, country_code, container, sas_token, folder):
+    def create_task(blob_type, country_code, container, sas_token, folder, start, stop=-1):
         @task(task_id=f"get_{country_code}_{blob_type}")
         def get_blobs_data_task():
 
-            return get_blobs_data(container=container, sas_token=sas_token, IRType=folder)
+            return get_blobs_data(container=container, sas_token=sas_token, IRType=folder, start=start, stop=stop)
 
         return get_blobs_data_task
 
@@ -151,7 +156,10 @@ def process_evidence_images():
                 ReProcessedStatus,
                 ReProcessedTime
             )
-            VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(sessionuid, sceneuid)
+            DO NOTHING 
+            """
         parameters=[tuple(row) for row in df.values]
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
 
@@ -163,7 +171,7 @@ def process_evidence_images():
     @task
     def load_to_sessions_table(df):
         #TASK: Calculate session_length
-        sql = """
+        sql = """    
                 INSERT INTO sessions(
                    Sessionuid,
                    session_start_date,
@@ -271,7 +279,12 @@ def process_evidence_images():
         cursor.close()
         conn.close()
 
-
+    # send_email = EmailOperator(
+    #     task_id='send_email',
+    #     to=email_to,
+    #     subject='MQ Data Processing Complete',
+    #     html_content='<p><b> The job processing IRMQ images completed!<b><p>'
+    # )
 
 
     #### TASKS ARE RUN HERE
@@ -293,36 +306,51 @@ def process_evidence_images():
         {'container': os.environ.get('GHA_CONTAINER'), 'sas_token': os.environ.get('GHA_SAS')},
         {'container': os.environ.get('CBL_CONTAINER'), 'sas_token': os.environ.get('CBL_SAS')}
     ]
-    for params in blob_params_list:
-        # in the line below, get the key and not value of  whatever value is currently contained in the container key
-        # basically doing a reverse search.
-        variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
-        country_code = variable_name[:3].lower()
 
-        # this line only generates the tasks. it doesn't run them
-        get_irmq_task = create_task(
-            blob_type='irmq',
-            country_code=country_code,
-            container=params['container'],
-            sas_token=params['sas_token'],
-            folder='IRMQ'
-        )
-        get_sessions_task = create_task(
-            blob_type='sessions',
-            country_code=country_code,
-            container=params['container'],
-            sas_token=params['sas_token'],
-            folder='IRSession'
-        )
-        # you have to store the output in a variable and call the task to run it
-        mq_task = get_irmq_task()
-        sessions_task = get_sessions_task()
+    with TaskGroup('get_irmq_blobs_grp') as irmq_group:
+        for params in blob_params_list:
+            # in the line below, get the key and not value of  whatever value is currently contained in the container key
+            # basically doing a reverse search.
+            variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
+            country_code = variable_name[:3].lower()
 
-        mq_tb.set_downstream(mq_task)
-        sessions_tb.set_downstream(sessions_task)
+            # this line only generates the tasks. it doesn't run them
 
-        irmq_dfs.append(mq_task)
-        sessions_dfs.append(sessions_task)
+            get_irmq_task = create_task(
+                blob_type='irmq',
+                country_code=country_code,
+                container=params['container'],
+                sas_token=params['sas_token'],
+                folder='IRMQ',
+                start=start,
+                stop=stop
+            )
+            # you have to store the output in a variable and call the task to run it
+            mq_task = get_irmq_task()
+
+    with TaskGroup('get_sessions_blobs_grp') as sessions_group:
+        for params in blob_params_list:
+            variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
+            country_code = variable_name[:3].lower()
+
+            get_sessions_task = create_task(
+                blob_type='sessions',
+                country_code=country_code,
+                container=params['container'],
+                sas_token=params['sas_token'],
+                folder='IRSession',
+                start=start,
+                stop=stop
+            )
+            sessions_task = get_sessions_task()
+
+
+
+    mq_tb.set_downstream(mq_task)
+    sessions_tb.set_downstream(sessions_task)
+
+    irmq_dfs.append(mq_task)
+    sessions_dfs.append(sessions_task)
 
 
     # combine the generated dfs for all countries into one
@@ -387,13 +415,13 @@ def process_evidence_images():
 
 
     load_mq =load_to_mq_table(mq_filtered_rows)
-    load_sessuibs = load_to_sessions_table(sessions_transformed_dates)
+    load_sessions = load_to_sessions_table(sessions_transformed_dates)
     #
-    # separated_images = separate_image_names()
-    # rslt.set_downstream(separated_images)
+    separated_images = separate_image_names()
+    load_mq.set_downstream(separated_images)
     #
-    # formated_url = format_image_urls()
-    # separated_images.set_downstream(formated_url)
+    formated_url = format_image_urls()
+    separated_images.set_downstream(formated_url)
 
 images = process_evidence_images()
 

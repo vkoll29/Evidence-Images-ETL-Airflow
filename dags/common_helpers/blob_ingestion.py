@@ -5,9 +5,9 @@ from pyarrow import parquet as pq
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from common_helpers.get_dates import get_dates
 
-def get_blobs_data(container, sas_token, IRType):
+def get_blobs_data(container, sas_token, IRType, start, stop=-1):
     accountURI = os.environ.get('URI')
-    start_date, end_date = get_dates(start=1)
+    start_date, end_date = get_dates(start=start, stop=stop)
     path = f'V2/Data/{IRType}'
     print(start_date, end_date)
 
@@ -27,6 +27,8 @@ def get_blobs_data(container, sas_token, IRType):
         dfs_list.append(df)
 
     all_data_df = pd.concat(dfs_list)
+
+
 
     print(len(all_data_df))
     return all_data_df

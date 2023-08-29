@@ -8,14 +8,19 @@ COPY requirments.txt /requirments.txt
 
 WORKDIR /opt/airflow/
 COPY .env .env
+COPY airflow.cfg airflow.cfg
 
 # upgrade pip then install specified packages in requirements.txt
 RUN pip install --user --upgrade pip
-
+RUN pip install no-cache-dir -r requirements.txt #no-cache-dir used to not save the downloaded packages locally. manage image size
 
 # install nano and vim
 # must set user to root first before running elevated commands, then set it back
 USER root
 RUN apt-get update && apt-get install -y nano
-RUN apt-get update && apt-get install -y vim
+RUN apt install -y net-tools
+RUN apt-get update && apt-get install -y telnet
+RUN apt-get install -y busybox
+RUN apt-get update && apt-get install -y iputils-ping
+RUN #apt-get update && apt-get install -y vim
 USER airflow
