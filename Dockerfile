@@ -4,7 +4,7 @@ FROM apache/airflow:2.6.3
 # Extend the image by copying the requirements file in the project folder to the docker image
 # Note that the requirements file wasn't copied to the projects root directory but the container's root
 # requirements file spelled incorrectly here, don't waste 20 days figuring out what's wrong
-COPY requirments.txt /requirments.txt
+COPY requirements.txt /requirements.txt
 
 WORKDIR /opt/airflow/
 COPY .env .env
