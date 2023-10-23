@@ -6,6 +6,11 @@ def concat_dfs(dfs_list):
     :param dfs_list: list of dfs from each blob ingestion task
     :return: one whole dataframe
     """
-    df = pd.concat(dfs_list)
-    print(len(df))
-    return df
+    print(len(dfs_list))
+    print(dfs_list)
+    if len(dfs_list) > 0:
+        df = pd.concat(dfs_list)
+        print(len(df))
+        return df
+    else:
+        return pd.DataFrame()

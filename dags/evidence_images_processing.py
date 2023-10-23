@@ -80,20 +80,20 @@ def process_evidence_images():
                    program_name varchar(255),
                    program_item_id int,
                    program_item_name varchar(255),
-                   client_code varchar(50),
-                   sub_client_code varchar(50),
-                   outlet_code varchar(100),
+                   client_code varchar(255),
+                   sub_client_code varchar(255),
+                   outlet_code varchar(255),
                    outlet_name varchar(255),
                    country_code varchar(10),
-                   user_id varchar(50),
-                   user_profile varchar(100),
-                   sessionstatus varchar(50),
+                   user_id varchar(255),
+                   user_profile varchar(255),
+                   sessionstatus varchar(255),
                    latitude double precision,
                    longitude double precision,
-                   cancel_call_note varchar(50),
+                   cancel_call_note varchar(255),
                    cancel_call_reason varchar(255),
                    cancel_evidence_image_url text,
-                   cancel_evidence_image_name varchar(100),
+                   cancel_evidence_image_name varchar(255),
                    session_end_latitude double precision,
                    session_end_longitude double precision
                    )                
@@ -117,8 +117,13 @@ def process_evidence_images():
         return get_blobs_data_task
 
     @task
-    def combine_dfs_task(task_suffix, dfs_list):
+    def combine_dfs_task(task_suffix, dfs_list, **kwargs):
         task_id = f'my_concat_dfs_task_{task_suffix}'
+        """
+                for key, value in kwargs.items():
+                    print(f"The parameter is: {key}")
+                    print(f"The length of {key} is {len(key)}")
+                """
         return concat_dfs(dfs_list)
 
     @task
@@ -132,12 +137,14 @@ def process_evidence_images():
 
     @task
     def transform_date_columns_task(df):
+
         return transform_date_columns(df)
 
 
 
     @task
     def filter_rows(df):
+        print(df.keys)
         return df[df['EvidenceImageURL'] != '']
 
     @task
@@ -209,12 +216,14 @@ def process_evidence_images():
                     logging.info("Data inserted successfully!")
 
                 except psycopg2.Error as e:
+                    # TODO: Review this part so you can identify actual column causing error. For now, edit all columns
                     if e.pgcode == errorcodes.STRING_DATA_RIGHT_TRUNCATION:
                         print(f"Error: {e}")
                         print(f"Column causing the error: {e.diag.column_name}")
                         logging.error(f"Error: {e}")
-                        logging.error(f"Column causing the error: {e.diag.column_name}")
+                        logging.error(f"Log  Column causing the error: {e.diag.column_name}")
                         raise AirflowException("DB Error: Could not load data to Sessions table")
+
 
     @task
     def separate_image_names():
@@ -327,6 +336,8 @@ def process_evidence_images():
             )
             # you have to store the output in a variable and call the task to run it
             mq_task = get_irmq_task()
+            irmq_dfs.append(mq_task)
+
 
     with TaskGroup('get_sessions_blobs_grp') as sessions_group:
         for params in blob_params_list:
@@ -343,18 +354,16 @@ def process_evidence_images():
                 stop=stop
             )
             sessions_task = get_sessions_task()
-
-
+            sessions_dfs.append(sessions_task)
 
     mq_tb.set_downstream(mq_task)
     sessions_tb.set_downstream(sessions_task)
 
-    irmq_dfs.append(mq_task)
-    sessions_dfs.append(sessions_task)
+
 
 
     # combine the generated dfs for all countries into one
-    combined_irmq_df = combine_dfs_task('irmq', irmq_dfs)
+    combined_irmq_df = combine_dfs_task('irmq', irmq_dfs, rslt = mq_task)
     combined_sessions_df = combine_dfs_task('sessions', sessions_dfs) # find a way to rename this dag_id
 
     # remove unwanted columns

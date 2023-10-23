@@ -4,6 +4,7 @@ import pyarrow as pa
 from pyarrow import parquet as pq
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from common_helpers.get_dates import get_dates
+from common_helpers.concat_dfs import concat_dfs
 
 def get_blobs_data(container, sas_token, IRType, start=1, stop=-1):
     accountURI = os.environ.get('URI')
@@ -26,7 +27,7 @@ def get_blobs_data(container, sas_token, IRType, start=1, stop=-1):
         df = parquet_table.to_pandas()
         dfs_list.append(df)
 
-    all_data_df = pd.concat(dfs_list)
+    all_data_df = concat_dfs(dfs_list)
 
 
 
