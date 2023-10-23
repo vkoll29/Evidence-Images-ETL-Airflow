@@ -25,9 +25,9 @@ load_dotenv()
 
 email_to = 'vkollspam1@gmail.com'
 start = 6
-stop = 4
+stop = -1
 @dag(dag_id='1_process_evidence_images',
-     start_date=datetime(2023,8,20),
+     start_date=datetime(2023,9,28),
      schedule_interval='@daily',
      max_active_runs=1,
     default_args={
@@ -223,7 +223,7 @@ def process_evidence_images():
             --WHERE evidenceimagename  like '%,%' --commented out this part to get all the images
         """
         update = "UPDATE evidence_images SET formattedevidenceimagename =%s WHERE sceneuid =%s"
-        test_acid = "SELECT sceneuid, evidenceimagename, formattedevidenceimagename FROM evidence_images WHERE evidenceimagename  like '%,%'"
+        #test_acid = "SELECT sceneuid, evidenceimagename, formattedevidenceimagename FROM evidence_images WHERE evidenceimagename  like '%,%'"
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh')
         conn = hook.get_conn()
         cursor = conn.cursor()
@@ -236,7 +236,7 @@ def process_evidence_images():
             # after selecting everything - both single and multiple images, split them in the following line
             # if there is a comma in the imagename, then split it (return list by default) else convert the single image to list
             list_of_images = row[1].split(',') if ',' in row[1] else [row[1]]
-            updates_params.append((list_of_images, row[0]))
+            updates_params.append((list_of_images, row[0])) # row[0] is the sceneuid - refer to the select statement
             # cursor.execute(update, (list_of_images, row[0]))
 
         cursor.executemany(update, updates_params)
