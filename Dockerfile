@@ -19,9 +19,18 @@ RUN pip install --no-cache-dir -r /requirements.txt
 # must set user to root first before running elevated commands, then set it back
 USER root
 RUN apt-get update && apt-get install -y nano
-RUN apt install -y net-tools
 RUN apt-get update && apt-get install -y telnet
-RUN apt-get install -y busybox
-RUN apt-get update && apt-get install -y iputils-ping
-RUN #apt-get update && apt-get install -y vim
+#RUN apt install -y net-tools
+#RUN apt-get install -y busybox
+#RUN apt-get update && apt-get install -y iputils-ping
+#RUN apt-get update && apt-get install -y vim
+
+# install pyodbc drivers
+RUN apt-get -y install unixodbc unixodbc-dev openssl libkrb5-3 tdsodbc build-essential gcc curl coinor-cbc
+RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
+RUN curl https://packages.microsoft.com/config/ubuntu/19.04/prod.list > /etc/apt/sources.list.d/mssql-release.list
+RUN apt-get -y update
+RUN ACCEPT_EULA=Y apt-get install msodbcsql17
+RUN apt-get clean
+
 USER airflow

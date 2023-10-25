@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
-import logging
-import os
+import pyodbc
 
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -8,6 +7,7 @@ from airflow.providers.microsoft.mssql.hooks.mssql import MsSqlHook
 from airflow.utils.task_group import TaskGroup
 from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowException
+
 
 # from dotenv import load_dotenv
 # import psycopg2
@@ -24,7 +24,7 @@ from airflow.exceptions import AirflowException
     catchup=False
 )
 def add_image_data():
-    @task
+
     def create_images_view():
 
         #this view is not used anywhere in this code, it's only here fore reference. I don't want to create a task with the view
@@ -88,6 +88,20 @@ def add_image_data():
         pg_cursor.close()
         pg_conn.close()
 
-    update_image_info = create_images_view()
+    #update_image_info = create_images_view()
+
+    @task
+    def test_mssql_conn():
+        try:
+            conn_str = f"Driver=ODBC Driver 17 for SQL Server;Server=168.63.70.212,1599;Database=ired;UID=su;PWD=7&F.n]z2"
+            conn = pyodbc.connect(conn_str)
+            print("Connection successful!")
+            conn.close()
+        except Exception as e:
+            print(f"Connection failed: {str(e)}")
+
+    test = test_mssql_conn()
+
+
 
 image_data = add_image_data()
