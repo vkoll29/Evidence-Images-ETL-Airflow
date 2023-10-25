@@ -9,7 +9,6 @@ FROM apache/airflow:2.6.3
 WORKDIR /opt/airflow/
 COPY requirements.txt /requirements.txt
 COPY .env .env
-COPY airflow.cfg airflow.cfg
 
 # upgrade pip then install specified packages in requirements.txt
 RUN pip install --user --upgrade pip

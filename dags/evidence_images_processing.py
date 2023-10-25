@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2 import errorcodes
 
-
 from common_helpers.concat_dfs import concat_dfs
 from common_helpers.blob_ingestion import get_blobs_data
 from common_helpers.filter_columns import filter_columns
@@ -22,21 +21,22 @@ from common_helpers.column_transformations import transform_column_dtypes, trans
 
 load_dotenv()
 
-
 email_to = 'vkollspam1@gmail.com'
-start = 6
+start = 15
 stop = -1
+
+
 @dag(dag_id='1_process_evidence_images',
-     start_date=datetime(2023,9,28),
+     start_date=datetime(2023, 9, 28),
      schedule_interval='@daily',
      max_active_runs=1,
-    default_args={
+     default_args={
          'owner': 'vkoll29',
          # 'retries': 1,
 
          # 'retry_delay': timedelta(seconds=30)
-    },
-    catchup=False)
+     },
+     catchup=False)
 def process_evidence_images():
     sas = os.environ.get('KENYA_SAS')
 
@@ -56,7 +56,8 @@ def process_evidence_images():
                 ReExportStatus Int,
                 ReExportTime timestamp,
                 ReProcessedStatus Int,
-                ReProcessedTime	timestamp
+                ReProcessedTime	timestamp,
+                PRIMARY KEY(sessionuid, sceneuid)
                 )                
         """
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
@@ -107,11 +108,9 @@ def process_evidence_images():
         cursor.close()
         conn.close()
 
-
     def create_task(blob_type, country_code, container, sas_token, folder, start, stop=-1):
         @task(task_id=f"get_{country_code}_{blob_type}")
         def get_blobs_data_task():
-
             return get_blobs_data(container=container, sas_token=sas_token, IRType=folder, start=start, stop=stop)
 
         return get_blobs_data_task
@@ -134,13 +133,10 @@ def process_evidence_images():
     def transform_column_dtypes_task(df):
         return transform_column_dtypes(df)
 
-
     @task
     def transform_date_columns_task(df):
 
         return transform_date_columns(df)
-
-
 
     @task
     def filter_rows(df):
@@ -162,12 +158,13 @@ def process_evidence_images():
                 ReExportTime,
                 ReProcessedStatus,
                 ReProcessedTime
+                
             )
             VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(sessionuid, sceneuid)
             DO NOTHING 
             """
-        parameters=[tuple(row) for row in df.values]
+        parameters = [tuple(row) for row in df.values]
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
 
         with hook.get_conn() as conn:
@@ -177,7 +174,7 @@ def process_evidence_images():
 
     @task
     def load_to_sessions_table(df):
-        #TASK: Calculate session_length
+        # TASK: Calculate session_length
         sql = """    
                 INSERT INTO sessions(
                    Sessionuid,
@@ -224,7 +221,6 @@ def process_evidence_images():
                         logging.error(f"Log  Column causing the error: {e.diag.column_name}")
                         raise AirflowException("DB Error: Could not load data to Sessions table")
 
-
     @task
     def separate_image_names():
         select = """
@@ -232,7 +228,7 @@ def process_evidence_images():
             --WHERE evidenceimagename  like '%,%' --commented out this part to get all the images
         """
         update = "UPDATE evidence_images SET formattedevidenceimagename =%s WHERE sceneuid =%s"
-        #test_acid = "SELECT sceneuid, evidenceimagename, formattedevidenceimagename FROM evidence_images WHERE evidenceimagename  like '%,%'"
+        # test_acid = "SELECT sceneuid, evidenceimagename, formattedevidenceimagename FROM evidence_images WHERE evidenceimagename  like '%,%'"
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh')
         conn = hook.get_conn()
         cursor = conn.cursor()
@@ -241,11 +237,10 @@ def process_evidence_images():
         updates_params = []
 
         for row in rows:
-
             # after selecting everything - both single and multiple images, split them in the following line
             # if there is a comma in the imagename, then split it (return list by default) else convert the single image to list
             list_of_images = row[1].split(',') if ',' in row[1] else [row[1]]
-            updates_params.append((list_of_images, row[0])) # row[0] is the sceneuid - refer to the select statement
+            updates_params.append((list_of_images, row[0]))  # row[0] is the sceneuid - refer to the select statement
             # cursor.execute(update, (list_of_images, row[0]))
 
         cursor.executemany(update, updates_params)
@@ -257,7 +252,6 @@ def process_evidence_images():
         conn.commit()
         cursor.close()
         conn.close()
-
 
     @task
     def format_image_urls():
@@ -278,7 +272,7 @@ def process_evidence_images():
         for i, row in enumerate(rows):
             urls = []
             for image in row[2]:
-                url = row[1]+image
+                url = row[1] + image
                 urls.append(url)
 
             updates_params.append((urls, row[0]))
@@ -294,7 +288,6 @@ def process_evidence_images():
     #     subject='MQ Data Processing Complete',
     #     html_content='<p><b> The job processing IRMQ images completed!<b><p>'
     # )
-
 
     #### TASKS ARE RUN HERE
     mq_tb = create_irmq_tb()
@@ -338,7 +331,6 @@ def process_evidence_images():
             mq_task = get_irmq_task()
             irmq_dfs.append(mq_task)
 
-
     with TaskGroup('get_sessions_blobs_grp') as sessions_group:
         for params in blob_params_list:
             variable_name = [key for key, value in os.environ.items() if value == params['container']][0]
@@ -359,12 +351,9 @@ def process_evidence_images():
     mq_tb.set_downstream(mq_task)
     sessions_tb.set_downstream(sessions_task)
 
-
-
-
     # combine the generated dfs for all countries into one
-    combined_irmq_df = combine_dfs_task('irmq', irmq_dfs, rslt = mq_task)
-    combined_sessions_df = combine_dfs_task('sessions', sessions_dfs) # find a way to rename this dag_id
+    combined_irmq_df = combine_dfs_task('irmq', irmq_dfs, rslt=mq_task)
+    combined_sessions_df = combine_dfs_task('sessions', sessions_dfs)  # find a way to rename this dag_id
 
     # remove unwanted columns
     # filtered_columns = filter_columns(combined_irmq_df)
@@ -409,8 +398,7 @@ def process_evidence_images():
     mq_filtered_columns = filter_columns_task(combined_irmq_df, mq_columns_to_keep)
     sessions_filtered_columns = filter_columns_task(combined_sessions_df, sessions_columns_to_keep)
 
-
-    #transform column types
+    # transform column types
     mq_transformed_column_types = transform_column_dtypes_task(mq_filtered_columns)
     sessions_transformed_column_type = transform_column_dtypes_task(sessions_filtered_columns)
 
@@ -418,12 +406,10 @@ def process_evidence_images():
     mq_transformed_dates = transform_date_columns_task(mq_transformed_column_types)
     sessions_transformed_dates = transform_date_columns_task(sessions_transformed_column_type)
 
-
     # # filter evidence image rows to only keep the rows that have images
     mq_filtered_rows = filter_rows(mq_transformed_dates)
 
-
-    load_mq =load_to_mq_table(mq_filtered_rows)
+    load_mq = load_to_mq_table(mq_filtered_rows)
     load_sessions = load_to_sessions_table(sessions_transformed_dates)
     #
     separated_images = separate_image_names()
@@ -431,6 +417,7 @@ def process_evidence_images():
     #
     formated_url = format_image_urls()
     separated_images.set_downstream(formated_url)
+
 
 images = process_evidence_images()
 
