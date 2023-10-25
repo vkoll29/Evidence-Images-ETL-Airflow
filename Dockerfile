@@ -12,7 +12,7 @@ COPY .env .env
 
 # upgrade pip then install specified packages in requirements.txt
 RUN pip install --user --upgrade pip
-RUN pip install --no-cache-dir -r /requirements.txt \
+RUN pip install --no-cache-dir -r /requirements.txt
     #no-cache-dir used to not save the downloaded packages locally. manage image size
 
 # install nano and vim

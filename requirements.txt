@@ -5,3 +5,4 @@ pyarrow
 dbt-core
 dbt-postgres
 astronomer-cosmos
+apache-airflow-providers-microsoft-mssql[common.sql]

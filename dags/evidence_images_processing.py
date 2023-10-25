@@ -56,9 +56,15 @@ def process_evidence_images():
                 ReExportStatus Int,
                 ReExportTime timestamp,
                 ReProcessedStatus Int,
+<<<<<<< Updated upstream
                 ReProcessedTime	timestamp,
                 PRIMARY KEY(sessionuid, sceneuid)
                 )                
+=======
+                ReProcessedTime	timestamp
+                PRIMARY KEY(sessionuid, sceneuid)
+                );   
+>>>>>>> Stashed changes
         """
         hook = PostgresHook(postgres_conn_id='postgres_dk_lh', schema='ired')
         conn = hook.get_conn()
